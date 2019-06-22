@@ -1236,7 +1236,7 @@ uint32_t get_pixel(int x, int y, uint32_t encoding, int stride, uint8_t *data)
 		case    MMAL_ENCODING_BAYER_SBGGR16:
 		case    MMAL_ENCODING_BAYER_SGBRG16:
 		case    MMAL_ENCODING_BAYER_SGRBG16:
-		case    MMAL_ENCODING_BAYER_SRGGB16:
+		//case    MMAL_ENCODING_BAYER_SRGGB16:
 		{
 			/* CHECK ME: are the MSB and LSB the right way around? */
 			uint16_t *data16 = (uint16_t*)data;
@@ -1272,7 +1272,7 @@ uint64_t get_channel(enum channels chan, uint32_t encoding, uint64_t *sums)
 		case    MMAL_ENCODING_BAYER_SRGGB8:
 		case    MMAL_ENCODING_BAYER_SRGGB10P:
 		case    MMAL_ENCODING_BAYER_SRGGB12P:
-		case    MMAL_ENCODING_BAYER_SRGGB16:
+		//case    MMAL_ENCODING_BAYER_SRGGB16:
 			return sums[rggb[chan]];
 
 		case    MMAL_ENCODING_BAYER_SGBRG8:
