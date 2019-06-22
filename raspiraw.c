@@ -564,6 +564,7 @@ static void buffers_to_rawcam(RASPIRAW_CALLBACK_T *dev)
 	}
 }
 
+static RASPIRAW_FRAME_PROCESSOR callback_frame_processor = NULL;
 static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 {
 	static int count = 0;
@@ -655,6 +656,10 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 		}
 	}
 
+	if (callback_frame_processor != NULL) {
+		callback_frame_processor(buffer->user_data, buffer->length);
+	}
+
 	mmal_buffer_header_release(buffer);
 
 	buffers_to_rawcam(dev);
@@ -671,6 +676,7 @@ static void buffers_to_isp_op(RASPIRAW_ISP_CALLBACK_T *dev)
 	}
 }
 
+static RASPIRAW_FRAME_PROCESSOR yuv_callback_frame_processor = NULL;
 static void yuv_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 {
 	static int count = 0;
@@ -733,6 +739,9 @@ static void yuv_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 		}
 	}
 
+	if (yuv_callback_frame_processor != NULL) {
+		yuv_callback_frame_processor(buffer->user_data, buffer->length);
+	}
 	mmal_buffer_header_release(buffer);
 
 	buffers_to_isp_op(yuv_cb);
@@ -1462,7 +1471,15 @@ static RASPIRAW_INIT_CODE pool_destroy(RASPIRAW_INIT_CODE exit_code);
 static RASPIRAW_INIT_CODE component_disable(RASPIRAW_INIT_CODE exit_code);
 static RASPIRAW_INIT_CODE component_destroy(RASPIRAW_INIT_CODE exit_code);
 
-RASPIRAW_INIT_CODE raspiraw_init(int argc, char** argv, int do_sleep) {
+RASPIRAW_INIT_CODE raspiraw_init(
+		int argc,
+		char** argv,
+		int do_sleep,
+		RASPIRAW_FRAME_PROCESSOR frame_processor,
+		RASPIRAW_FRAME_PROCESSOR yuv_frame_processor) {
+	callback_frame_processor = frame_processor;
+	yuv_callback_frame_processor = yuv_frame_processor;
+
 	//Initialise any non-zero config values.
 	cfg.exposure = -1;
 	cfg.gain = -1;
@@ -2451,5 +2468,5 @@ void update_regs(const struct sensor_def *sensor, struct mode_def *mode, int hfl
 }
 
 int main(int argc, char** argv) {
-	return raspiraw_init (argc, argv, 1);
+	return raspiraw_init (argc, argv, 1, NULL, NULL);
 }
