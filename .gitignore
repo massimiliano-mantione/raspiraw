@@ -2,3 +2,4 @@ raspiraw
 *.ppm
 *.raw
 *.jpg
+.vscode
