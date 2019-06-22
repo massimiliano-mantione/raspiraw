@@ -1480,13 +1480,13 @@ int main(int argc, char** argv) {
 		fprintf(stdout, "\n%s Camera App %s\n\n", basename(argv[0]), VERSION_STRING);
 
 		raspicli_display_help(cmdline_commands, cmdline_commands_size);
-		exit(-1);
+		return -1;
 	}
 
 	// Parse the command line and put options in to our status structure
 	if (parse_cmdline(argc, argv, &cfg))
 	{
-		exit(-1);
+		return -1;
 	}
 
 	snprintf(i2c_device_name, sizeof(i2c_device_name), "/dev/i2c-%d", cfg.i2c_bus);
@@ -1603,7 +1603,7 @@ int main(int argc, char** argv) {
 	{
 		// needs change after fix for https://github.com/6by9/raspiraw/issues/2
 		vcos_log_error("--headerG supported for native bit depth only");
-		exit(-1);
+		return -1;
 	}
 
 	if (cfg.exposure_us != -1)
