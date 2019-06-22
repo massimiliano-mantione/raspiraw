@@ -2467,6 +2467,9 @@ void update_regs(const struct sensor_def *sensor, struct mode_def *mode, int hfl
 	}
 }
 
+#ifndef RASPIRAW_NO_MAIN
 int main(int argc, char** argv) {
 	return raspiraw_init (argc, argv, 1, NULL, NULL);
 }
+#endif
+

@@ -1,0 +1,12 @@
+for SRC in raspiraw.c RaspiCLI.c ; do \
+  arm-linux-gnueabihf-gcc \
+    -g -O0 \
+    -DRASPIRAW_NO_MAIN \
+    -c \
+    -fPIC \
+    -lmmal_core -lmmal_util -lmmal_vc_client -lvcos -lbcm_host -lvcsm -lvchiq_arm \
+    -I/rpxc/sysroot/opt/vc/include/ \
+    -L/rpxc/sysroot/opt/vc/lib/ \
+    $SRC ; done
+
+ar -cvq raspiraw.a raspiraw.o RaspiCLI.o -o

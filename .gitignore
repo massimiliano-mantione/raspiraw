@@ -1,4 +1,6 @@
 raspiraw
+*.a
+*.o
 *.ppm
 *.raw
 *.jpg
