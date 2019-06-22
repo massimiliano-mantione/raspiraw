@@ -53,6 +53,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "interface/vcsm/user-vcsm.h"
 
 #include "RaspiCLI.h"
+#include "raspiraw.h"
 
 #include <sys/ioctl.h>
 
@@ -1436,23 +1437,32 @@ static void vr_ip_cb(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 	buffers_to_isp_op(dev);
 }
 
-int main(int argc, char** argv) {
-	RASPIRAW_PARAMS_T cfg = { 0 };
-	RASPIRAW_CALLBACK_T dev = {
+static RASPIRAW_PARAMS_T cfg = { 0 };
+static RASPIRAW_CALLBACK_T dev = {
 			.cfg = &cfg,
 			.rawcam_pool = NULL,
 			.rawcam_output = NULL
 		};
-	RASPIRAW_ISP_CALLBACK_T yuv_cb = {
+static RASPIRAW_ISP_CALLBACK_T yuv_cb = {
 			.cfg = &cfg,
 		};
-	uint32_t encoding;
-	const struct sensor_def *sensor;
-	struct mode_def *sensor_mode = NULL;
-	VCOS_THREAD_T awb_thread;
-	VCOS_THREAD_T processing_thread;
-	VCOS_THREAD_T processing_yuv_thread;
+static uint32_t encoding;
+static const struct sensor_def *sensor;
+static struct mode_def *sensor_mode = NULL;
+static VCOS_THREAD_T awb_thread;
+static VCOS_THREAD_T processing_thread;
+static VCOS_THREAD_T processing_yuv_thread;
 
+static MMAL_COMPONENT_T *rawcam=NULL, *isp=NULL, *render=NULL;
+static MMAL_PORT_T *output = NULL;
+static MMAL_POOL_T *pool = NULL, *yuv_pool = NULL;
+
+static RASPIRAW_INIT_CODE port_disable(RASPIRAW_INIT_CODE exit_code);
+static RASPIRAW_INIT_CODE pool_destroy(RASPIRAW_INIT_CODE exit_code);
+static RASPIRAW_INIT_CODE component_disable(RASPIRAW_INIT_CODE exit_code);
+static RASPIRAW_INIT_CODE component_destroy(RASPIRAW_INIT_CODE exit_code);
+
+RASPIRAW_INIT_CODE raspiraw_init(int argc, char** argv, int do_sleep) {
 	//Initialise any non-zero config values.
 	cfg.exposure = -1;
 	cfg.gain = -1;
@@ -1480,13 +1490,13 @@ int main(int argc, char** argv) {
 		fprintf(stdout, "\n%s Camera App %s\n\n", basename(argv[0]), VERSION_STRING);
 
 		raspicli_display_help(cmdline_commands, cmdline_commands_size);
-		return -1;
+		return RASPIRAW_BAD_CMD_LINE;
 	}
 
 	// Parse the command line and put options in to our status structure
 	if (parse_cmdline(argc, argv, &cfg))
 	{
-		return -1;
+		return RASPIRAW_BAD_CMD_LINE;
 	}
 
 	snprintf(i2c_device_name, sizeof(i2c_device_name), "/dev/i2c-%d", cfg.i2c_bus);
@@ -1496,7 +1506,7 @@ int main(int argc, char** argv) {
 	if (!sensor)
 	{
 		vcos_log_error("No sensor found. Aborting");
-		return -1;
+		return RASPIRAW_NO_SENSOR_FOUND;
 	}
 
 	if (cfg.mode >= 0 && cfg.mode < sensor->num_modes)
@@ -1507,7 +1517,7 @@ int main(int argc, char** argv) {
 	if (!sensor_mode)
 	{
 		vcos_log_error("Invalid mode %d - aborting", cfg.mode);
-		return -2;
+		return RASPIRAW_INVALID_SENSOR_MODE;
 	}
 
 
@@ -1603,7 +1613,7 @@ int main(int argc, char** argv) {
 	{
 		// needs change after fix for https://github.com/6by9/raspiraw/issues/2
 		vcos_log_error("--headerG supported for native bit depth only");
-		return -1;
+		return RASPIRAW_INVALID_SENSOR_MODE;
 	}
 
 	if (cfg.exposure_us != -1)
@@ -1620,7 +1630,7 @@ int main(int argc, char** argv) {
 	if (!encoding)
 	{
 		vcos_log_error("Failed to map bitdepth %d and order %d into encoding\n", cfg.bit_depth, sensor_mode->order);
-		return -3;
+		return RASPIRAW_INVALID_SENSOR_MODE;
 	}
 	vcos_log_error("Encoding %08X", encoding);
 
@@ -1633,13 +1643,13 @@ int main(int argc, char** argv) {
 		if(vcos_status != VCOS_SUCCESS)
 		{
 			printf("Failed to create awb thread\n");
-			return -4;
+			return RASPIRAW_AWB_ERROR;
 		}
 		dev.awb_queue = mmal_queue_create();
 		if (!dev.awb_queue)
 		{
 			printf("Failed to create awb queue\n");
-			return -4;
+			return RASPIRAW_AWB_ERROR;
 		}
 	}
 	else
@@ -1654,20 +1664,16 @@ int main(int argc, char** argv) {
 		if(vcos_status != VCOS_SUCCESS)
 		{
 			printf("Failed to create processing thread\n");
-			return -4;
+			return RASPIRAW_VCOS_ERROR;
 		}
 		dev.processing_queue = mmal_queue_create();
 		if (!dev.processing_queue)
 		{
 			printf("Failed to create processing queue\n");
-			return -4;
+			return RASPIRAW_VCOS_ERROR;
 		}
 	}
 
-	MMAL_COMPONENT_T *rawcam=NULL, *isp=NULL, *render=NULL;
-	MMAL_STATUS_T status;
-	MMAL_PORT_T *output = NULL;
-	MMAL_POOL_T *pool = NULL, *yuv_pool = NULL;
 	MMAL_PARAMETER_CAMERA_RX_CONFIG_T rx_cfg;
 	MMAL_PARAMETER_CAMERA_RX_TIMING_T rx_timing;
 	unsigned int i;
@@ -1675,17 +1681,17 @@ int main(int argc, char** argv) {
 	bcm_host_init();
 	vcos_log_register("RaspiRaw", VCOS_LOG_CATEGORY);
 
-	status = mmal_component_create("vc.ril.rawcam", &rawcam);
+	MMAL_STATUS_T status = mmal_component_create("vc.ril.rawcam", &rawcam);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to create rawcam");
-		return -1;
+		return RASPIRAW_MMAL_ERROR;
 	}
 	status = mmal_port_parameter_set_boolean(rawcam->output[0], MMAL_PARAMETER_ZERO_COPY, MMAL_TRUE);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to set zero copy");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 
 
@@ -1693,32 +1699,32 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to create isp");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	status = mmal_port_parameter_set_boolean(isp->input[0], MMAL_PARAMETER_ZERO_COPY, MMAL_TRUE);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to set zero copy");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 	status = mmal_port_parameter_set_boolean(isp->output[0], MMAL_PARAMETER_ZERO_COPY, MMAL_TRUE);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to set zero copy");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 
 	status = mmal_component_create(MMAL_COMPONENT_DEFAULT_VIDEO_RENDERER, &render);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to create render");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	status = mmal_port_parameter_set_boolean(render->input[0], MMAL_PARAMETER_ZERO_COPY, MMAL_TRUE);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to set zero copy");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 
 	output = rawcam->output[0];
@@ -1729,7 +1735,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to get cfg");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	if (sensor_mode->encoding || cfg.bit_depth == sensor_mode->native_bit_depth)
 	{
@@ -1792,7 +1798,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to set cfg");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 	rx_timing.hdr.id = MMAL_PARAMETER_CAMERA_RX_TIMING;
@@ -1801,7 +1807,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to get timing");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	if (sensor_mode->timing[0])
 		rx_timing.timing1 = sensor_mode->timing[0];
@@ -1825,7 +1831,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to set timing");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 	if (cfg.camera_num != -1) {
@@ -1834,7 +1840,7 @@ int main(int argc, char** argv) {
 		if (status != MMAL_SUCCESS)
 		{
 			vcos_log_error("Failed to set camera_num");
-			goto component_destroy;
+			return component_destroy(RASPIRAW_GENERIC_ERROR);
 		}
 	}
 
@@ -1842,19 +1848,19 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to enable rawcam");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	status = mmal_component_enable(isp);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to enable isp");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	status = mmal_component_enable(render);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to enable render");
-		goto component_destroy;
+		return component_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 	output->format->es->video.crop.width = sensor_mode->width;
@@ -1867,7 +1873,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed port_format_commit");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 
 	output->buffer_size = output->buffer_size_recommended;
@@ -1953,13 +1959,13 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to copy port format");
-		goto pool_destroy;
+		return pool_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	status = mmal_port_format_commit(port);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to commit port format on isp input");
-		goto pool_destroy;
+		return pool_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 	port->buffer_num = output->buffer_num;
@@ -1987,7 +1993,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to commit port format on isp output");
-		goto pool_destroy;
+		return pool_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 	if (sensor_mode->black_level)
@@ -2024,7 +2030,7 @@ int main(int argc, char** argv) {
 	if (!pool)
 	{
 		vcos_log_error("Failed to create pool");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 	for (i=0; i<output->buffer_num; i++)
 	{
@@ -2063,7 +2069,7 @@ int main(int argc, char** argv) {
 	if (!dev.isp_ip_pool)
 	{
 		vcos_log_error("Failed to create isp_ip_pool");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 	dev.isp_ip = isp->input[0];
 
@@ -2072,7 +2078,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to enable isp ip port");
-		goto pool_destroy;
+		return pool_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 
@@ -2081,7 +2087,7 @@ int main(int argc, char** argv) {
 	if (!yuv_pool)
 	{
 		vcos_log_error("Failed to create yuv pool");
-		goto component_disable;
+		return component_disable(RASPIRAW_GENERIC_ERROR);
 	}
 	for (i=0; i<isp->output[0]->buffer_num; i++)
 	{
@@ -2116,7 +2122,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to enable isp op port");
-		goto pool_destroy;
+		return pool_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 	yuv_cb.isp_output = isp->output[0];
 	yuv_cb.isp_op_pool = yuv_pool;
@@ -2156,13 +2162,13 @@ int main(int argc, char** argv) {
 		if (status != MMAL_SUCCESS)
 		{
 			vcos_log_error("Failed to copy port format - isp to render");
-			goto pool_destroy;
+			return pool_destroy(RASPIRAW_GENERIC_ERROR);
 		}
 		status = mmal_port_format_commit(render->input[0]);
 		if (status != MMAL_SUCCESS)
 		{
 			vcos_log_error("Failed to commit port format on render input");
-			goto pool_destroy;
+			return pool_destroy(RASPIRAW_GENERIC_ERROR);
 		}
 
 		render->input[0]->buffer_num = isp->output[0]->buffer_num;
@@ -2172,7 +2178,7 @@ int main(int argc, char** argv) {
 		if (!yuv_cb.vr_ip_pool)
 		{
 			vcos_log_error("Failed to create vr_ip_pool");
-			goto component_disable;
+			return component_disable(RASPIRAW_GENERIC_ERROR);
 		}
 		yuv_cb.vr_ip = render->input[0];
 
@@ -2182,7 +2188,7 @@ int main(int argc, char** argv) {
 		if (status != MMAL_SUCCESS)
 		{
 			vcos_log_error("Failed to enable vr ip port");
-			goto pool_destroy;
+			return pool_destroy(RASPIRAW_GENERIC_ERROR);
 		}
 
 	}
@@ -2210,7 +2216,7 @@ int main(int argc, char** argv) {
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to enable port");
-		goto pool_destroy;
+		return pool_destroy(RASPIRAW_GENERIC_ERROR);
 	}
 
 	buffers_to_rawcam(&dev);
@@ -2218,27 +2224,42 @@ int main(int argc, char** argv) {
 
 	start_camera_streaming(sensor, sensor_mode);
 
-	vcos_sleep(cfg.timeout);
+	if (do_sleep == 1) {
+	  vcos_sleep(cfg.timeout);
+	  raspiraw_stop();
+	} else {
+		return RASPIRAW_OK;
+	}
+}
 
+void raspiraw_stop() {
 	stop_camera_streaming(sensor);
+	port_disable(RASPIRAW_OK);
+}
 
-port_disable:
+static RASPIRAW_INIT_CODE port_disable(RASPIRAW_INIT_CODE exit_code) {
 	if (cfg.capture)
 	{
-		status = mmal_port_disable(output);
+		MMAL_STATUS_T status = mmal_port_disable(output);
 		if (status != MMAL_SUCCESS)
 		{
 			vcos_log_error("Failed to disable port");
 			return -1;
 		}
 	}
-pool_destroy:
+	return pool_destroy(exit_code);
+}
+
+static RASPIRAW_INIT_CODE pool_destroy(RASPIRAW_INIT_CODE exit_code) {
 	if (pool)
 		mmal_port_pool_destroy(output, pool);
-component_disable:
+	return component_disable(exit_code);
+}
+
+static RASPIRAW_INIT_CODE component_disable(RASPIRAW_INIT_CODE exit_code) {
 	if (brcm_header)
 		free(brcm_header);
-	status = mmal_component_disable(render);
+	MMAL_STATUS_T status = mmal_component_disable(render);
 	if (status != MMAL_SUCCESS)
 	{
 		vcos_log_error("Failed to disable render");
@@ -2253,7 +2274,10 @@ component_disable:
 	{
 		vcos_log_error("Failed to disable rawcam");
 	}
-component_destroy:
+	return component_destroy(exit_code);
+}
+
+static RASPIRAW_INIT_CODE component_destroy(RASPIRAW_INIT_CODE exit_code) {
 	if (rawcam)
 		mmal_component_destroy(rawcam);
 	if (isp)
@@ -2305,8 +2329,7 @@ component_destroy:
 		}
 		free(cfg.ptso);
 	}
-
-	return 0;
+	return exit_code;
 }
 
 void modRegBit(struct mode_def *mode, uint16_t reg, int bit, int value, enum operation op)
@@ -2427,3 +2450,6 @@ void update_regs(const struct sensor_def *sensor, struct mode_def *mode, int hfl
 	}
 }
 
+int main(int argc, char** argv) {
+	return raspiraw_init (argc, argv, 1);
+}
