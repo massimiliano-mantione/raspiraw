@@ -257,6 +257,12 @@ Finally add this line to your ~/.bashrc.
 	PATH=~/raspiraw:~/raspiraw/tools:$PATH
 	$
 
+##### Alternatively: cross compile
+
+A docker based cross compilation environment is [this](https://github.com/massimiliano-mantione/docker-raspberry-pi-cross-compiler) (forked from [here](https://github.com/sdt/docker-raspberry-pi-cross-compiler), pull request pending).
+
+In that environment use the `xbuildme` script, then copy the `raspiraw` executable to your PI.
+
 #### do once after reboot or use of raspistill/raspivid
 
 Execute camera_i2c to make raspiraw work.

@@ -1,0 +1,6 @@
+arm-linux-gnueabihf-gcc \
+  -g -O0 \
+  -lmmal_core -lmmal_util -lmmal_vc_client -lvcos -lbcm_host -lvcsm -lvchiq_arm \
+  -I/rpxc/sysroot/opt/vc/include/ \
+  -L/rpxc/sysroot/opt/vc/lib/ \
+  -o raspiraw raspiraw.c RaspiCLI.c
